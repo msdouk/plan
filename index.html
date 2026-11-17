@@ -30,6 +30,13 @@
 .card a,.card button{flex:1;min-width:120px;height:42px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;gap:6px;color:#0f172a;text-decoration:none}
 .card a.go{background:#009038;border-color:#007a2f;color:#fff}
 .card .x{position:absolute;right:8px;top:6px;flex:none;min-width:0;width:34px;height:34px;border:0;font-size:20px;color:#64748b}
+.card .cli{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:8px 10px;margin:0 0 10px}
+.card .cli small{display:block;color:#15803d;font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase}
+.card .cli b.nm{display:block;font-size:16px;margin:1px 0 5px}
+.card .cli .hd{display:flex;gap:10px;align-items:center}.card .cli .hd img{width:58px;height:58px;border-radius:10px;object-fit:cover;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.2);flex:none}
+.card .cli .kv{margin:0}.card .cli em{display:block;font-style:normal;color:#64748b;font-size:11.5px;margin-top:5px}
+.card .cli.bad{background:#fef2f2;border-color:#fecaca}.card .cli.bad small{color:#b91c1c}
+.ok{color:#15803d}.due{color:#b45309}
 .msg{position:absolute;z-index:7;left:50%;top:120px;transform:translateX(-50%);background:#0f172a;color:#fff;padding:8px 14px;border-radius:10px;font-size:13.5px;display:none;max-width:90%}
 .foot{position:absolute;z-index:4;left:10px;bottom:4px;font-size:10.5px;color:#334155;background:rgba(255,255,255,.75);padding:1px 6px;border-radius:6px}
 .card.on ~ .foot{display:none}
@@ -76,6 +83,39 @@
     if (pl.lines) lines.addFeatures(fmt.readFeatures(pl.lines, {dataProjection: 'EPSG:4326', featureProjection: 'EPSG:3857'}));
     (pl.labels || []).forEach(function (L) { var f = new ol.Feature(new ol.geom.Point(ol.proj.fromLonLat(L.c))); f.setProperties({t: L.t, k: L.k, r: L.r || 0, h: L.h || 4}); labels.addFeature(f); });
   });
+  /* informations du bénéficiaire transmises dans le lien (#p=…&c=données.signature), signées par ENGUITRACI-Sarl */
+  var PUBKEY = {"kty": "EC", "crv": "P-256", "x": "QjWOFdHp474P1j0ho0N_PIm64A7IRK2W2vgc9qcGtAs", "y": "IUxf-YqCK6nLHRG2dy8lPz0R9Bqfel3tJ41-9sNLopg"}, CLI = null;
+  function b64uDec(t) { t = t.replace(/-/g, '+').replace(/_/g, '/'); while (t.length % 4) t += '='; var s = atob(t), b = new Uint8Array(s.length); for (var i = 0; i < s.length; i++) b[i] = s.charCodeAt(i); return b; }
+  function readClient(c) {
+    var m = /^([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(c || '');
+    if (!m) return Promise.resolve(null);
+    if (!window.crypto || !crypto.subtle) return Promise.resolve({bad: true});
+    return crypto.subtle.importKey('jwk', PUBKEY, {name: 'ECDSA', namedCurve: 'P-256'}, false, ['verify']).then(function (k) {
+      return crypto.subtle.verify({name: 'ECDSA', hash: 'SHA-256'}, k, b64uDec(m[2]), new TextEncoder().encode(m[1]));
+    }).then(function (ok) { return ok ? JSON.parse(new TextDecoder().decode(b64uDec(m[1]))) : {bad: true}; }, function () { return {bad: true}; });
+  }
+  /* photo jointe au lien : acceptée seulement si son empreinte correspond à celle signée */
+  function readPhoto(o, f64) {
+    if (!o || o.bad || !o.h || !f64) return Promise.resolve(o);
+    var b; try { b = b64uDec(f64); } catch (e) { return Promise.resolve(o); }
+    return crypto.subtle.digest('SHA-256', b).then(function (h) {
+      var s = '', u = new Uint8Array(h); for (var i = 0; i < u.length; i++) s += String.fromCharCode(u[i]);
+      if (btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '').slice(0, 22) === o.h) o.photo = URL.createObjectURL(new Blob([b], {type: 'image/jpeg'}));
+      return o;
+    }, function () { return o; });
+  }
+  function fdate(d) { var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d || ''); return m ? m[3] + '/' + m[2] + '/' + m[1] : (d || ''); }
+  function clientHtml(f) {
+    if (!CLI || (!CLI.bad && CLI.i !== f.get('id'))) return '';
+    if (CLI.bad) return '<div class="cli bad"><small>Informations non vérifiées</small>Ce lien a été modifié ou n’a pas été émis par ENGUITRACI-Sarl : les informations du bénéficiaire ne sont pas affichées.</div>';
+    var A = CLI.a, C = CLI.c;
+    return '<div class="cli"><div class="hd">' + (CLI.photo ? '<img src="' + CLI.photo + '" alt="Photo du bénéficiaire">' : '') + '<div><small>Bénéficiaire</small><b class="nm">' + esc(CLI.b) + '</b></div></div><div class="kv">' +
+      (CLI.d ? '<span>Attribuée le</span><b>' + esc(fdate(CLI.d)) + (CLI.m ? ' · ' + esc(String(CLI.m).toLowerCase()) : '') + '</b>' : '') +
+      (A ? '<span>' + (A[0] === 'T' ? 'Transfert' : 'Attestation') + '</span><b>N° ' + esc(A[1]) + (A[2] ? ' du ' + esc(fdate(A[2])) : '') + '</b>' : '') +
+      (CLI.s != null ? '<span>Paiement</span><b class="' + (CLI.s ? 'ok' : 'due') + '">' + (CLI.s ? 'Soldé' : 'En cours') + '</b>' : '') +
+      (C ? '<span>Certificat</span><b>' + esc(C[0]) + (C[1] ? ' du ' + esc(fdate(C[1])) : '') + '</b>' : '') +
+      '</div><em>✓ Informations certifiées par ENGUITRACI-Sarl au ' + esc(fdate(CLI.t)) + '. Seule l’attestation originale fait foi.</em></div>';
+  }
   var sel = null;
   var FONT = 'system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif';
   var cache = {};
@@ -116,7 +156,7 @@
     var pl = f.get('plan'), eq = f.get('t') === 'e', ll = lonlatOf(f), gm = 'https://www.google.com/maps/dir/?api=1&destination=' + ll[1].toFixed(6) + ',' + ll[0].toFixed(6);
     var title = eq ? f.get('e') || 'Équipement' : 'Parcelle n° ' + (f.get('n') || '—');
     $('#card').innerHTML = '<button class="x" type="button" aria-label="Fermer">×</button><h2>' + esc(title) + '</h2><div class="sub">Plan d’aménagement de ' + esc(pl.name) + (f.get('l') ? ' · Lot ' + esc(f.get('l')) : '') + '</div>' +
-      '<div class="kv">' + (f.get('l') ? '<span>Lot</span><b>' + esc(f.get('l')) + '</b>' : '') + (!eq ? '<span>Parcelle</span><b>n° ' + esc(f.get('n') || '—') + '</b>' : '') +
+      clientHtml(f) + '<div class="kv">' + (f.get('l') ? '<span>Lot</span><b>' + esc(f.get('l')) + '</b>' : '') + (!eq ? '<span>Parcelle</span><b>n° ' + esc(f.get('n') || '—') + '</b>' : '') +
       (f.get('s') ? '<span>Superficie</span><b>' + NF.format(f.get('s')) + ' m² (indicative)</b>' : '') + '<span>GPS</span><b>' + ll[1].toFixed(6) + ', ' + ll[0].toFixed(6) + '</b></div>' +
       '<div class="btns"><a class="go" href="' + gm + '" target="_blank" rel="noopener">➜ M’y rendre</a><button type="button" id="b-share">Partager</button></div>';
     $('#card').classList.add('on');
@@ -127,7 +167,8 @@
       else { try { navigator.clipboard.writeText(url); msg('Lien copié.'); } catch (e) { prompt('Lien de la parcelle :', url); } }
     };
     if (zoom !== false) map.getView().fit(f.getGeometry().getExtent(), {padding: [150, 60, 260, 60], maxZoom: 19, duration: 500});
-    if (location.hash !== '#p=' + f.get('id')) history.replaceState(null, '', '#p=' + encodeURIComponent(f.get('id')));
+    var hm = /[#&]p=([^&]+)/.exec(location.hash);
+    if (!hm || decodeURIComponent(hm[1]) !== f.get('id')) history.replaceState(null, '', '#p=' + encodeURIComponent(f.get('id')));
   }
   map.on('singleclick', function (e) {
     var f = map.forEachFeatureAtPixel(e.pixel, function (x) { return parcels.hasFeature(x) ? x : null; }, {hitTolerance: 2});
@@ -166,7 +207,9 @@
 
   /* lien direct : #p=<identifiant de la parcelle> */
   function fromHash() {
-    var m = /[#&]p=([^&]+)/.exec(location.hash), f = m && byId[decodeURIComponent(m[1])];
+    var m = /[#&]p=([^&]+)/.exec(location.hash), f = m && byId[decodeURIComponent(m[1])], c = /[#&]c=([^&]+)/.exec(location.hash);
+    var ph = /[#&]f=([^&]+)/.exec(location.hash);
+    if (f && c) { readClient(c[1]).then(function (o) { return readPhoto(o, ph && ph[1]); }).then(function (o) { CLI = o; show(f); }); return; }
     if (f) show(f); else { fitAll(); if (m) msg('Parcelle introuvable sur le plan publié : contactez ENGUITRACI-Sarl.', 6000); }
   }
   window.addEventListener('hashchange', fromHash);

@@ -37,6 +37,12 @@
 .card .cli .kv{margin:0}.card .cli em{display:block;font-style:normal;color:#64748b;font-size:11.5px;margin-top:5px}
 .card .cli.bad{background:#fef2f2;border-color:#fecaca}.card .cli.bad small{color:#b91c1c}
 .ok{color:#15803d}.due{color:#b45309}
+.card{max-height:72vh;overflow-y:auto}
+.card .docs{border:1px solid #c7d2fe;background:#f5f7ff;border-radius:10px;padding:8px 10px;margin:0 0 10px}
+.card .docs small{display:block;color:#3730a3;font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;margin-bottom:4px}
+.card .docs button{display:flex;align-items:center;gap:9px;width:100%;text-align:left;border:1px solid #e0e7ff;background:#fff;border-radius:8px;padding:7px 9px;margin-top:5px;font:inherit;cursor:pointer}
+.card .docs button i{flex:none;width:32px;height:32px;border-radius:7px;background:#eef2ff;color:#3730a3;font:700 10px/32px sans-serif;text-align:center;font-style:normal}
+.card .docs button b{display:block;font-size:13.5px}.card .docs button span{color:#64748b;font-size:12px}.card .docs .wait{color:#64748b;font-size:12.5px}
 .msg{position:absolute;z-index:7;left:50%;top:120px;transform:translateX(-50%);background:#0f172a;color:#fff;padding:8px 14px;border-radius:10px;font-size:13.5px;display:none;max-width:90%}
 .foot{position:absolute;z-index:4;left:10px;bottom:4px;font-size:10.5px;color:#334155;background:rgba(255,255,255,.75);padding:1px 6px;border-radius:6px}
 .card.on ~ .foot{display:none}
@@ -116,6 +122,37 @@
       (C ? '<span>Certificat</span><b>' + esc(C[0]) + (C[1] ? ' du ' + esc(fdate(C[1])) : '') + '</b>' : '') +
       '</div><em>✓ Informations certifiées par ENGUITRACI-Sarl au ' + esc(fdate(CLI.t)) + '. Seule l’attestation originale fait foi.</em></div>';
   }
+  /* coffre de documents signés : fichiers chiffrés (AES-GCM) d/<coffre>/…, clé uniquement dans le lien (#…&k=coffre.clé) */
+  var VAULT = null, VDOCS = null;
+  function vaultKey() { return crypto.subtle.importKey('raw', b64uDec(VAULT.k), 'AES-GCM', false, ['decrypt']); }
+  function decryptBuf(buf) { var u = new Uint8Array(buf); return vaultKey().then(function (k) { return crypto.subtle.decrypt({name: 'AES-GCM', iv: u.slice(0, 12)}, k, u.slice(12)); }); }
+  function loadVault() {
+    if (!VAULT || !window.crypto || !crypto.subtle) return Promise.resolve(null);
+    return fetch('d/' + VAULT.id + '/index.bin', {cache: 'no-cache'}).then(function (r) { if (!r.ok) throw 0; return r.arrayBuffer(); })
+      .then(decryptBuf).then(function (b) { return JSON.parse(new TextDecoder().decode(b)); }).catch(function () { return {err: true}; });
+  }
+  function docsHtml(f) {
+    if (!VAULT) return '';
+    if (!VDOCS) return '<div class="docs" id="docs"><small>Mes documents signés</small><div class="wait">Chargement…</div></div>';
+    if (VDOCS.err) return '<div class="docs" id="docs"><small>Mes documents signés</small><div class="wait">Documents indisponibles pour le moment (lien incomplet ou publication en cours). Réessayez plus tard.</div></div>';
+    if (VDOCS.p && VDOCS.p !== f.get('id')) return '';
+    var L = VDOCS.docs || [];
+    return '<div class="docs" id="docs"><small>Mes documents signés</small>' + (L.length ? L.map(function (d, i) {
+      return '<button type="button" data-doc="' + i + '"><i>' + (/pdf/.test(d.mime) ? 'PDF' : 'IMG') + '</i><span><b>' + esc(d.label) + '</b>' + (d.date ? 'signé le ' + esc(fdate(d.date)) : '') + '</span></button>';
+    }).join('') : '<div class="wait">Aucun document publié.</div>') + '</div>';
+  }
+  function bindDocs() {
+    document.querySelectorAll('#docs [data-doc]').forEach(function (b) {
+      b.onclick = function () {
+        var d = VDOCS.docs[Number(b.dataset.doc)], w = null;
+        try { w = window.open('', '_blank'); if (w) w.document.write('<p style="font:16px sans-serif;padding:20px">Ouverture du document…</p>'); } catch (e) {}
+        fetch('d/' + VAULT.id + '/' + d.id + '.bin', {cache: 'no-cache'}).then(function (r) { if (!r.ok) throw 0; return r.arrayBuffer(); }).then(decryptBuf).then(function (buf) {
+          var u = URL.createObjectURL(new Blob([buf], {type: d.mime}));
+          if (w) w.location.href = u; else { var a = document.createElement('a'); a.href = u; a.download = d.name || 'document'; document.body.appendChild(a); a.click(); a.remove(); }
+        }).catch(function () { if (w) w.close(); msg('Document indisponible pour le moment.'); });
+      };
+    });
+  }
   var sel = null;
   var FONT = 'system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif';
   var cache = {};
@@ -156,10 +193,10 @@
     var pl = f.get('plan'), eq = f.get('t') === 'e', ll = lonlatOf(f), gm = 'https://www.google.com/maps/dir/?api=1&destination=' + ll[1].toFixed(6) + ',' + ll[0].toFixed(6);
     var title = eq ? f.get('e') || 'Équipement' : 'Parcelle n° ' + (f.get('n') || '—');
     $('#card').innerHTML = '<button class="x" type="button" aria-label="Fermer">×</button><h2>' + esc(title) + '</h2><div class="sub">Plan d’aménagement de ' + esc(pl.name) + (f.get('l') ? ' · Lot ' + esc(f.get('l')) : '') + '</div>' +
-      clientHtml(f) + '<div class="kv">' + (f.get('l') ? '<span>Lot</span><b>' + esc(f.get('l')) + '</b>' : '') + (!eq ? '<span>Parcelle</span><b>n° ' + esc(f.get('n') || '—') + '</b>' : '') +
+      clientHtml(f) + docsHtml(f) + '<div class="kv">' + (f.get('l') ? '<span>Lot</span><b>' + esc(f.get('l')) + '</b>' : '') + (!eq ? '<span>Parcelle</span><b>n° ' + esc(f.get('n') || '—') + '</b>' : '') +
       (f.get('s') ? '<span>Superficie</span><b>' + NF.format(f.get('s')) + ' m² (indicative)</b>' : '') + '<span>GPS</span><b>' + ll[1].toFixed(6) + ', ' + ll[0].toFixed(6) + '</b></div>' +
       '<div class="btns"><a class="go" href="' + gm + '" target="_blank" rel="noopener">➜ M’y rendre</a><button type="button" id="b-share">Partager</button></div>';
-    $('#card').classList.add('on');
+    $('#card').classList.add('on'); bindDocs();
     $('#card .x').onclick = function () { $('#card').classList.remove('on'); sel = null; pLayer.changed(); };
     $('#b-share').onclick = function () {
       var url = location.href.split('#')[0] + '#p=' + encodeURIComponent(f.get('id'));
@@ -208,7 +245,8 @@
   /* lien direct : #p=<identifiant de la parcelle> */
   function fromHash() {
     var m = /[#&]p=([^&]+)/.exec(location.hash), f = m && byId[decodeURIComponent(m[1])], c = /[#&]c=([^&]+)/.exec(location.hash);
-    var ph = /[#&]f=([^&]+)/.exec(location.hash);
+    var ph = /[#&]f=([^&]+)/.exec(location.hash), kv = /[#&]k=([a-z0-9]{8,40})\.([A-Za-z0-9_-]{43})/.exec(location.hash);
+    if (f && kv) { VAULT = {id: kv[1], k: kv[2]}; loadVault().then(function (v) { VDOCS = v || {err: true}; if (sel === f) show(f, false); }); }
     if (f && c) { readClient(c[1]).then(function (o) { return readPhoto(o, ph && ph[1]); }).then(function (o) { CLI = o; show(f); }); return; }
     if (f) show(f); else { fitAll(); if (m) msg('Parcelle introuvable sur le plan publié : contactez ENGUITRACI-Sarl.', 6000); }
   }

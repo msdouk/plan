@@ -134,7 +134,7 @@
   function docsHtml(f) {
     if (!VAULT) return '';
     if (!VDOCS) return '<div class="docs" id="docs"><small>Mes documents signés</small><div class="wait">Chargement…</div></div>';
-    if (VDOCS.err) return '<div class="docs" id="docs"><small>Mes documents signés</small><div class="wait">Documents indisponibles pour le moment (lien incomplet ou publication en cours). Réessayez plus tard.</div></div>';
+    if (VDOCS.err) return '<div class="docs" id="docs"><small>Mes documents signés</small><div class="wait">Vos documents sont en cours de mise en ligne : réessayez dans quelques minutes (actualisez la page).</div></div>';
     if (VDOCS.p && VDOCS.p !== f.get('id')) return '';
     var L = VDOCS.docs || [];
     return '<div class="docs" id="docs"><small>Mes documents signés</small>' + (L.length ? L.map(function (d, i) {
